@@ -49,6 +49,15 @@ and test anywhere:
 ```sh
 go test ./...
 go run ./cmd/agent-sandbox validate policy.yaml
+go run ./cmd/agent-sandbox decide --policy policy.yaml exec /usr/bin/python3
+```
+
+`decide` prints the decision for one access as JSON and exits 1 when
+refused — the dry-run of observe mode, on any host:
+
+```sh
+$ go run ./cmd/agent-sandbox decide --policy policy.yaml net tcp 169.254.169.254 443
+{"allowed":false,"rule":"net.deny_cidr[0]"}
 ```
 
 ## Related
