@@ -1,0 +1,10 @@
+# Build and fuzz artifacts
+/agent-sandbox
+/agent-sandbox-test
+*.test
+/fuzz-corpus/
+testdata/fuzz/
+
+# Go
+*.a
+*.o
