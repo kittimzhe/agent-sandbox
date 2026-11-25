@@ -7,15 +7,18 @@ import (
 
 func TestCompile(t *testing.T) {
 	cases := []struct {
-		pattern string
-		prefix  string
-		kind    Kind
+		pattern   string
+		prefix    string
+		kind      Kind
+		canonical string // the pattern spelled back; / and /** are one rule
 	}{
-		{"/usr/bin/ls", "/usr/bin/ls", Exact},
-		{"/usr/bin/*", "/usr/bin", OneLevel},
-		{"/home/alice/.ssh/**", "/home/alice/.ssh", Recursive},
-		{"/etc/**", "/etc", Recursive},
-		{"/", "", Recursive},
+		{"/usr/bin/ls", "/usr/bin/ls", Exact, "/usr/bin/ls"},
+		{"/usr/bin/*", "/usr/bin", OneLevel, "/usr/bin/*"},
+		{"/home/alice/.ssh/**", "/home/alice/.ssh", Recursive, "/home/alice/.ssh/**"},
+		{"/etc/**", "/etc", Recursive, "/etc/**"},
+		{"/", "", Recursive, "/"},
+		{"/*", "", OneLevel, "/*"},
+		{"/**", "", Recursive, "/"},
 	}
 	for _, tc := range cases {
 		r, err := Compile(tc.pattern)
@@ -25,8 +28,8 @@ func TestCompile(t *testing.T) {
 		if r.Prefix() != tc.prefix || r.Kind() != tc.kind {
 			t.Errorf("Compile(%q) = %q, %v; want %q, %v", tc.pattern, r.Prefix(), r.Kind(), tc.prefix, tc.kind)
 		}
-		if got := r.Pattern(); got != tc.pattern {
-			t.Errorf("Pattern() = %q, want %q", got, tc.pattern)
+		if got := r.Pattern(); got != tc.canonical {
+			t.Errorf("Pattern() = %q, want %q", got, tc.canonical)
 		}
 	}
 }
@@ -114,6 +117,18 @@ func TestRootPatternMatchesEverything(t *testing.T) {
 	}
 	if r.Match("") || r.Match("etc/passwd") {
 		t.Errorf("the root pattern matched a relative path")
+	}
+}
+
+// Compile("/*") must not become the root rule: / names a build with
+// one component, not everything.
+func TestRootOneLevelIsNotEverything(t *testing.T) {
+	r := mustCompile(t, "/*")
+	if r.Match("/usr/bin/ls") || r.Match("/") {
+		t.Errorf("/* matched deeper than one level: %+v", r)
+	}
+	if !r.Match("/tmp") {
+		t.Errorf("/* did not match one level: %+v", r)
 	}
 }
 

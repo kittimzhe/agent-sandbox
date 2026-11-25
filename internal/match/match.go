@@ -62,11 +62,11 @@ func Compile(pattern string) (Rule, error) {
 	if !strings.HasPrefix(pattern, "/") {
 		return Rule{}, fmt.Errorf("pattern %q is not an absolute path", pattern)
 	}
-	if strings.Contains(pattern, "//") {
-		return Rule{}, fmt.Errorf("pattern %q has an empty component", pattern)
-	}
 	if pattern == "/" {
 		return Rule{prefix: "", kind: Recursive}, nil
+	}
+	if strings.Contains(pattern, "//") {
+		return Rule{}, fmt.Errorf("pattern %q has an empty component", pattern)
 	}
 	kind := Exact
 	body := pattern
@@ -79,9 +79,6 @@ func Compile(pattern string) (Rule, error) {
 	if strings.Contains(body, "*") {
 		return Rule{}, fmt.Errorf("pattern %q has a '*' the kernel side cannot enforce: it may only end a path", pattern)
 	}
-	if body == "" { // the pattern was "/"
-		return Rule{prefix: "", kind: Recursive}, nil
-	}
 	return Rule{prefix: body, kind: kind}, nil
 }
 
@@ -91,8 +88,10 @@ func (r Rule) Match(path string) bool {
 	if path == "" || !strings.HasPrefix(path, "/") {
 		return false
 	}
-	if r.prefix == "" { // the root pattern matches every absolute path
-		return r.kind == Recursive
+	// The root pattern matches every absolute path. A star under the
+	// root falls through to the component count like any other.
+	if r.prefix == "" && r.kind == Recursive {
+		return true
 	}
 	if path == r.prefix {
 		// Exact is its match; Recursive's star stands for zero or
