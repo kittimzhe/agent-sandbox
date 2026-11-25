@@ -1,0 +1,56 @@
+# agent-sandbox
+
+An eBPF sandbox for AI agent processes on Linux. Give an agent process
+tree a policy: what it may execute, what it may open, where it may
+connect. Everything the kernel reports or refuses comes out as one JSON
+event per line.
+
+**Status: design and userspace foundation.** The BPF programs and the
+loader need a Linux host with a BPF-capable kernel; they are not in the
+tree yet. See [DESIGN.md](DESIGN.md) for the architecture, the
+milestones and what this deliberately does not do (no kernel patches,
+no TPM, no daemon).
+
+## The policy file
+
+A strict subset of YAML, parsed by hand with no YAML library: unknown
+keys, missing required keys and malformed values are errors with line
+numbers, never defaults.
+
+```yaml
+name: agent-web
+
+scope:
+  cgroup: /sys/fs/cgroup/agent-sandbox   # the process tree to sandbox
+
+exec:
+  allow:
+    - /usr/bin/*
+
+file:
+  deny_read:
+    - /home/*/.ssh/**
+
+net:
+  allow:
+    - tcp/443
+  deny_cidr:
+    - 169.254.169.254/32   # cloud metadata endpoint
+```
+
+## Development
+
+Requires Go 1.27+. The packages under `internal/` are platform-neutral
+and test anywhere:
+
+```sh
+go test ./...
+```
+
+## Related
+
+- [shirudo](https://github.com/shirudo-dev/shirudo) — the kernel-side
+  signed-BPF platform this project studies and borrows its discipline
+  from (strict parsing, hand-rolled formats, documented tradeoffs).
+  agent-sandbox is the lightweight, single-host counterpart for agent
+  processes.
