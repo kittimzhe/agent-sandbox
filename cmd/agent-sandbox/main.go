@@ -99,9 +99,19 @@ func validate(args []string) error {
 	return nil
 }
 
-// decide prints the decision for one access as JSON, so a script or a
-// test harness consumes it without parsing prose.
-func decide(args []string) error {
+// request is one access to decide, parsed from the command line.
+type request struct {
+	kind  string // "exec", "file" or "net"
+	path  string // exec and file
+	write bool   // file
+	proto string // net, lower case
+	addr  netip.Addr
+	port  uint16
+}
+
+// parseDecideArgs splits the decide command line into the policy file
+// and the access it names.
+func parseDecideArgs(args []string) (string, request, error) {
 	rest := args
 	var file string
 	for len(rest) > 0 {
@@ -109,51 +119,74 @@ func decide(args []string) error {
 			break
 		}
 		if len(rest) < 2 {
-			return fmt.Errorf("--policy needs a file")
+			return "", request{}, fmt.Errorf("--policy needs a file")
 		}
 		file, rest = rest[1], rest[2:]
 	}
 	if file == "" {
-		return fmt.Errorf("usage: agent-sandbox decide --policy <file> exec|file|net ...")
+		return "", request{}, fmt.Errorf("usage: agent-sandbox decide --policy <file> exec|file|net ...")
+	}
+	if len(rest) == 0 {
+		return "", request{}, fmt.Errorf("what to decide: exec <path> | file <path> [read|write] | net <proto> <addr> <port>")
+	}
+	req := request{kind: rest[0]}
+	switch req.kind {
+	case "exec":
+		if len(rest) != 2 {
+			return "", request{}, fmt.Errorf("usage: decide --policy <file> exec <path>")
+		}
+		req.path = rest[1]
+	case "file":
+		if len(rest) < 2 || len(rest) > 3 {
+			return "", request{}, fmt.Errorf("usage: decide --policy <file> file <path> [read|write]")
+		}
+		req.path = rest[1]
+		if len(rest) == 3 {
+			if rest[2] != "read" && rest[2] != "write" {
+				return "", request{}, fmt.Errorf("mode %q is read or write", rest[2])
+			}
+			req.write = rest[2] == "write"
+		}
+	case "net":
+		if len(rest) != 4 {
+			return "", request{}, fmt.Errorf("usage: decide --policy <file> net <proto> <addr> <port>")
+		}
+		addr, err := netip.ParseAddr(rest[2])
+		if err != nil {
+			return "", request{}, fmt.Errorf("bad address %q: %w", rest[2], err)
+		}
+		port, err := strconv.ParseUint(rest[3], 10, 16)
+		if err != nil {
+			return "", request{}, fmt.Errorf("bad port %q", rest[3])
+		}
+		req.proto = strings.ToLower(rest[1])
+		req.addr = addr
+		req.port = uint16(port)
+	default:
+		return "", request{}, fmt.Errorf("unknown access kind %q, want exec, file or net", req.kind)
+	}
+	return file, req, nil
+}
+
+// decide prints the decision for one access as JSON, so a script or a
+// test harness consumes it without parsing prose.
+func decide(args []string) error {
+	file, req, err := parseDecideArgs(args)
+	if err != nil {
+		return err
 	}
 	_, e, err := loadPolicy(file)
 	if err != nil {
 		return err
 	}
-	if len(rest) == 0 {
-		return fmt.Errorf("what to decide: exec <path> | file <path> [read|write] | net <proto> <addr> <port>")
-	}
 	var v decision.Verdict
-	switch rest[0] {
+	switch req.kind {
 	case "exec":
-		if len(rest) != 2 {
-			return fmt.Errorf("usage: decide --policy <file> exec <path>")
-		}
-		v = e.Exec(rest[1])
+		v = e.Exec(req.path)
 	case "file":
-		if len(rest) < 2 || len(rest) > 3 {
-			return fmt.Errorf("usage: decide --policy <file> file <path> [read|write]")
-		}
-		write := len(rest) == 3 && rest[2] == "write"
-		if len(rest) == 3 && rest[2] != "write" && rest[2] != "read" {
-			return fmt.Errorf("mode %q is read or write", rest[2])
-		}
-		v = e.File(rest[1], write)
+		v = e.File(req.path, req.write)
 	case "net":
-		if len(rest) != 4 {
-			return fmt.Errorf("usage: decide --policy <file> net <proto> <addr> <port>")
-		}
-		addr, err := netip.ParseAddr(rest[2])
-		if err != nil {
-			return fmt.Errorf("bad address %q: %w", rest[2], err)
-		}
-		port, err := strconv.ParseUint(rest[3], 10, 16)
-		if err != nil {
-			return fmt.Errorf("bad port %q", rest[3])
-		}
-		v = e.Net(strings.ToLower(rest[1]), addr, uint16(port))
-	default:
-		return fmt.Errorf("unknown access kind %q, want exec, file or net", rest[0])
+		v = e.Net(req.proto, req.addr, req.port)
 	}
 	verdict := struct {
 		Allowed bool   `json:"allowed"`
