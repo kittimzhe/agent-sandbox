@@ -15,7 +15,10 @@ no TPM, no daemon).
 
 A strict subset of YAML, parsed by hand with no YAML library: unknown
 keys, missing required keys and malformed values are errors with line
-numbers, never defaults.
+numbers, never defaults. A path pattern may end in `*` (one component)
+or `**` (any number); a `*` anywhere else is refused, because the
+kernel side matches by prefix and a pattern it cannot enforce must not
+parse.
 
 ```yaml
 name: agent-web
@@ -29,7 +32,7 @@ exec:
 
 file:
   deny_read:
-    - /home/*/.ssh/**
+    - /root/.ssh/**
 
 net:
   allow:
@@ -45,6 +48,7 @@ and test anywhere:
 
 ```sh
 go test ./...
+go run ./cmd/agent-sandbox validate policy.yaml
 ```
 
 ## Related
