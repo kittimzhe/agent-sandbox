@@ -13,7 +13,9 @@ no TPM, no daemon).
 
 ## The policy file
 
-A strict subset of YAML, parsed by hand with no YAML library: unknown
+Three defaults ship in [policy/defaults/](policy/defaults/) —
+`agent-web`, `agent-dev` and `agent-ci` — as a copy-and-edit starting
+point. A strict subset of YAML, parsed by hand with no YAML library: unknown
 keys, missing required keys and malformed values are errors with line
 numbers, never defaults. A path pattern may end in `*` (one component)
 or `**` (any number); a `*` anywhere else is refused, because the

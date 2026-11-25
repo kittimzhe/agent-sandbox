@@ -1,0 +1,32 @@
+# agent-dev: an agent with local development tools.
+# It runs from the system paths and the user's toolchains, and reaches
+# package registries, forges and DNS; it may not read the operator's
+# keys or cloud credentials.
+name: agent-dev
+
+scope:
+  cgroup: /sys/fs/cgroup/agent-sandbox
+
+exec:
+  allow:
+    - /usr/bin/*
+    - /bin/*
+    - /usr/local/bin/*
+    - /opt/**
+
+file:
+  deny_read:
+    - /root/.ssh/**
+    - /root/.aws/**
+    - /root/.config/gcloud/**
+    - /root/.gnupg/**
+
+net:
+  allow:
+    - tcp/443
+    - tcp/22
+    - udp/53
+    - tcp/53
+  deny_cidr:
+    - 169.254.169.254/32
+    - fd00:ec2::254/128

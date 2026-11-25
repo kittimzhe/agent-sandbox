@@ -1,0 +1,32 @@
+# agent-ci: an agent that builds and tests code.
+# It runs everything installed and reaches the registries and forges
+# it pulls from; it may not rewrite system files, and the write rules
+# name the trees a build must not touch.
+name: agent-ci
+
+scope:
+  cgroup: /sys/fs/cgroup/agent-sandbox
+
+exec:
+  allow:
+    - /usr/bin/*
+    - /bin/*
+    - /usr/local/bin/*
+    - /usr/sbin/*
+
+file:
+  deny_write:
+    - /etc/**
+    - /usr/**
+    - /root/.ssh/**
+  deny_read:
+    - /root/.ssh/**
+
+net:
+  allow:
+    - tcp/443
+    - udp/53
+    - tcp/53
+  deny_cidr:
+    - 169.254.169.254/32
+    - fd00:ec2::254/128

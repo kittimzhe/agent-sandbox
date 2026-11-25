@@ -1,0 +1,30 @@
+# agent-web: an agent that browses and calls HTTPS APIs.
+# It may run the usual user binaries and read anything except the
+# operator's keys; it reaches the network on 443 and DNS only.
+name: agent-web
+
+scope:
+  cgroup: /sys/fs/cgroup/agent-sandbox
+
+exec:
+  allow:
+    - /usr/bin/*
+    - /bin/*
+    - /usr/local/bin/*
+
+file:
+  deny_read:
+    - /root/.ssh/**
+    - /root/.gnupg/**
+  deny_write:
+    - /etc/**
+    - /root/**
+
+net:
+  allow:
+    - tcp/443
+    - udp/53
+    - tcp/53
+  deny_cidr:
+    - 169.254.169.254/32
+    - fd00:ec2::254/128
