@@ -155,6 +155,14 @@ func run(args []string) error {
 		return err
 	}
 	defer ef.Close()
+	// The file tables ride along in the same run: reads and writes
+	// the policy refuses are refused, nothing else is touched.
+	fe, err := loader.LoadFilePolicy(e.FileDenyRead(), e.FileDenyWrite(), id)
+	if err != nil {
+		sc.Close()
+		return err
+	}
+	defer fe.Close()
 	fmt.Fprintf(os.Stderr, "running %s in %s under %s\n", strings.Join(command, " "), sc.Path, p.Name)
 	cmd, err := sc.RunScoped(selfExe, command)
 	if err != nil {

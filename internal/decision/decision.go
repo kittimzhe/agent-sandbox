@@ -114,6 +114,16 @@ func (e *Engine) ExecRules() []match.Rule {
 	return e.execAllow
 }
 
+// FileDenyRead is the compiled deny_read table.
+func (e *Engine) FileDenyRead() []match.Rule {
+	return e.fileDenyRead
+}
+
+// FileDenyWrite is the compiled deny_write table.
+func (e *Engine) FileDenyWrite() []match.Rule {
+	return e.fileDenyWrite
+}
+
 // Net decides whether a sandboxed task may connect to an address.
 // A CIDR the policy refuses is refused before the allow list, so a
 // port an allow entry names is still refused inside that CIDR.

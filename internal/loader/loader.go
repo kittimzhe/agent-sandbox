@@ -13,6 +13,7 @@ package loader
 
 //go:generate go run github.com/cilium/ebpf/cmd/bpf2go -target amd64,arm64 -cflags "-mcpu=v4 -O2 -g -I../../bpf" count_exec ../../bpf/count_exec.bpf.c
 //go:generate go run github.com/cilium/ebpf/cmd/bpf2go -target amd64,arm64 -cflags "-mcpu=v4 -O2 -g -I../../bpf" policy_exec ../../bpf/policy_exec.bpf.c
+//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -target amd64,arm64 -cflags "-mcpu=v4 -O2 -g -I../../bpf" policy_file ../../bpf/policy_file.bpf.c
 
 import (
 	"errors"
@@ -196,6 +197,95 @@ func (e *Enforcement) Close() error {
 	}
 	err := e.Link.Close()
 	if err2 := e.Obj.Close(); err == nil {
+		err = err2
+	}
+	return err
+}
+
+// FileEnforcement is the loaded file_open program with the deny
+// tables filled.
+type FileEnforcement struct {
+	Obj  *policy_fileObjects
+	Link link.Link
+}
+
+// fillFileTables writes one direction's rules into its two tables.
+func fillFileTables(rules []match.Rule, lpm, hash *ebpf.Map, dir string) error {
+	for i, r := range rules {
+		prefix := r.Prefix()
+		if r.Kind() != match.Exact {
+			prefix += "/"
+		}
+		if len(prefix) > maxPrefix {
+			return fmt.Errorf("%s rule %d (%q) does not fit the kernel table: a key holds %d bytes", dir, i, r.Pattern(), maxPrefix)
+		}
+		if r.Kind() == match.Exact {
+			var pk cPath
+			copy(pk.Data[:], prefix)
+			if err := hash.Update(&pk, uint8(1), ebpf.UpdateAny); err != nil {
+				return fmt.Errorf("%s rule %d: %w", dir, i, err)
+			}
+			continue
+		}
+		var (
+			key cKey
+			val cRule
+		)
+		key.PrefixLen = uint32(len(prefix)) * 8
+		copy(key.Data[:], prefix)
+		if r.Kind() == match.OneLevel {
+			val.Kind = kindOne
+		} else {
+			val.Kind = kindRec
+		}
+		val.Plen = uint8(len(prefix))
+		if err := lpm.Update(&key, &val, ebpf.UpdateAny); err != nil {
+			return fmt.Errorf("%s rule %d: %w", dir, i, err)
+		}
+	}
+	return nil
+}
+
+// LoadFilePolicy loads the file_open program and fills the deny
+// tables from the policy's two lists.
+func LoadFilePolicy(denyRead, denyWrite []match.Rule, scopeCgroupID uint64) (*FileEnforcement, error) {
+	if len(denyRead) > maxRules {
+		return nil, fmt.Errorf("%d file.deny_read rules, the kernel table holds %d", len(denyRead), maxRules)
+	}
+	if len(denyWrite) > maxRules {
+		return nil, fmt.Errorf("%d file.deny_write rules, the kernel table holds %d", len(denyWrite), maxRules)
+	}
+	obj := &policy_fileObjects{}
+	if err := loadPolicy_fileObjects(obj, nil); err != nil {
+		return nil, fmt.Errorf("load policy_file: %w", err)
+	}
+	fail := func(err error) (*FileEnforcement, error) {
+		obj.Close()
+		return nil, err
+	}
+	if err := fillFileTables(denyRead, obj.DenyRead, obj.DenyReadExact, "file.deny_read"); err != nil {
+		return fail(err)
+	}
+	if err := fillFileTables(denyWrite, obj.DenyWrite, obj.DenyWriteExact, "file.deny_write"); err != nil {
+		return fail(err)
+	}
+	if err := obj.ScopedCgroups.Update(scopeCgroupID, uint8(1), ebpf.UpdateAny); err != nil {
+		return fail(fmt.Errorf("scope cgroup: %w", err))
+	}
+	l, err := link.AttachLSM(link.LSMOptions{Program: obj.CheckFile})
+	if err != nil {
+		return fail(fmt.Errorf("attach lsm/file_open: %w", err))
+	}
+	return &FileEnforcement{Obj: obj, Link: l}, nil
+}
+
+// Close detaches and frees the program and its maps.
+func (f *FileEnforcement) Close() error {
+	if f == nil {
+		return nil
+	}
+	err := f.Link.Close()
+	if err2 := f.Obj.Close(); err == nil {
 		err = err2
 	}
 	return err
