@@ -117,10 +117,15 @@ func cgroupID(path string) (uint64, error) {
 // run enforces: the LSM program refuses what the policy's exec.allow
 // list does not name, for every task in the scope. The command sees
 // EPERM, the same decision the engine prints, with the rule that made
-// it on stderr.
+// it on stderr. The policy is verified against the pinned public key
+// before anything loads: an unverified file never reaches the kernel.
 func run(args []string) error {
 	policyFile, command, err := parseRunArgs(args)
 	if err != nil {
+		return err
+	}
+	pubKey := flagValue(args, "--public")
+	if err := verifyIfPinned(pubKey, policyFile); err != nil {
 		return err
 	}
 	p, e, err := loadPolicy(policyFile)
@@ -190,6 +195,13 @@ func parseRunArgs(args []string) (string, []string, error) {
 	var policyFile string
 	var command []string
 	for i := 0; i < len(args); i++ {
+		if args[i] == "--public" {
+			if i+1 >= len(args) {
+				return "", nil, fmt.Errorf("--public needs a file")
+			}
+			i++
+			continue
+		}
 		if args[i] == "--policy" {
 			if i+1 >= len(args) {
 				return "", nil, fmt.Errorf("--policy needs a file")
@@ -202,10 +214,24 @@ func parseRunArgs(args []string) (string, []string, error) {
 			command = args[i+1:]
 			break
 		}
-		return "", nil, fmt.Errorf("usage: agent-sandbox run --policy <file> -- <command> [args...]")
+		return "", nil, fmt.Errorf("usage: agent-sandbox run --policy <file> --public <key> -- <command> [args...]")
 	}
 	if policyFile == "" || len(command) == 0 {
-		return "", nil, fmt.Errorf("usage: agent-sandbox run --policy <file> -- <command> [args...]")
+		return "", nil, fmt.Errorf("usage: agent-sandbox run --policy <file> --public <key> -- <command> [args...]")
 	}
 	return policyFile, command, nil
+}
+
+// flagValue returns the value of a flag anywhere before "--", for the
+// --public key a run names.
+func flagValue(args []string, flag string) string {
+	for i, a := range args {
+		if a == "--" {
+			return ""
+		}
+		if a == flag && i+1 < len(args) {
+			return args[i+1]
+		}
+	}
+	return ""
 }

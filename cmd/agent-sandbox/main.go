@@ -24,18 +24,25 @@ Usage:
   agent-sandbox validate <policy-file>
       Check a policy file: parse it and compile every path pattern.
 
+  agent-sandbox sign --key <private-key> <policy-file>
+      Write the policy's detached signature next to it.
+
+  agent-sandbox keys generate --private <file> --public <file>
+      Make an Ed25519 keypair for policy signing.
+
   agent-sandbox decide --policy <file> exec <path>
   agent-sandbox decide --policy <file> file <path> [read|write]
   agent-sandbox decide --policy <file> net <proto> <addr> <port>
       Print the decision the policy makes for one access, and the rule
       that made it. The dry-run of observe mode, on any host.
 
-  agent-sandbox run --policy <file> -- <command> [args...]
-      (M1) Run a command under the policy, enforced by the kernel.
+  agent-sandbox run --policy <file> --public <key> -- <command> [args...]
+      (Linux) Run a command under the policy, enforced by the kernel.
+      The policy is verified against the public key first.
 
-  agent-sandbox observe --policy <file> -- <command> [args...]
+  agent-sandbox observe --policy <file> [--public <key>] -- <command> [args...]
       (Linux) Run a command under the policy's scope with the kernel
-      watching: the exec counts of the scope, no enforcement yet.
+      watching. With --public, the policy is verified first.
 `
 
 // The Linux build replaces both: observeCmd with the real observe,
@@ -46,7 +53,7 @@ var (
 		return fmt.Errorf("observe needs a Linux host with a BPF kernel")
 	}
 	runCmd = func(args []string) error {
-		return fmt.Errorf("run needs a Linux host with a BPF kernel")
+		return fmt.Errorf("run needs a Linux host with a BPF kernel; the policy and its signature were not checked")
 	}
 	scopeShim = func(argv []string) (bool, error) { return false, nil }
 )
@@ -69,6 +76,10 @@ func main() {
 	switch os.Args[1] {
 	case "validate":
 		err = validate(os.Args[2:])
+	case "sign":
+		err = signCmd(os.Args[2:])
+	case "keys":
+		err = keysCmd(os.Args[2:])
 	case "decide":
 		err = decide(os.Args[2:])
 	case "observe":
