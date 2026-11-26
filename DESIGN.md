@@ -1,10 +1,11 @@
 # agent-sandbox 设计文档（工作名）
 
-> 状态：设计稿 v0.2（2026-11-25 更新）
+> 状态：设计稿 v0.3（2026-11-26 更新）
 > 目标：求职作品 + 真实可用的 AI Agent 运行时沙箱
 > 参考系：shirudo（内核级信任链）、Tetragon（通用 eBPF 安全平台）、KubeArmor（容器策略）
-> 进度：M0 用户态部分已完成——policy/match/decision/event 四包 + validate/decide CLI +
-> 三个默认策略 + fuzz ×3 + CI workflow；BPF/loader/scope 待 Linux 环境（M0 剩余 + M1）
+> 进度：M0 ✅ + M1 ✅——run 一条命令挂 4 个 BPF 程序（exec 计数 tracepoint +
+> exec/file/net 三个 LSM），语义矩阵全绿，同源编译器（引擎与内核表）。
+> 待做：签名简化层（M2 简化版）、OTLP 导出、ringbuf 事件流、parity 测试。
 
 ## 1. 一句话定位
 

@@ -5,12 +5,14 @@ tree a policy: what it may execute, what it may open, where it may
 connect. Everything the kernel reports or refuses comes out as one JSON
 event per line.
 
-**Status: the kernel side runs.** `observe` loads a BPF program
-(tracepoint `sched/sched_process_exec`, compiled with `-mcpu=v4`),
-attaches it, runs a command inside a cgroup v2 scope, and reports the
-exec count of the scope — no enforcement yet, that is M1. See
-[DESIGN.md](DESIGN.md) for the architecture and what this
-deliberately does not do (no kernel patches, no TPM, no daemon).
+**Status: the kernel side enforces exec, file and net.** `run`
+attaches three BPF LSM programs (bprm_check_security, file_open,
+socket_connect) plus an exec-counting tracepoint, fills their tables
+from the policy, and refuses what the policy does not name — inside a
+cgroup v2 scope the command enters before its first exec. The same
+compiler backs the user-space engine and the kernel tables. See
+[DESIGN.md](DESIGN.md) for the architecture and what this deliberately
+does not do (no kernel patches, no TPM, no daemon).
 
 ## The policy file
 
