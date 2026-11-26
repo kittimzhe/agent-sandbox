@@ -46,6 +46,18 @@ net:
     - 169.254.169.254/32   # cloud metadata endpoint
 ```
 
+## One-minute demo
+
+On a Linux host with a BPF-capable kernel (the dev VM of
+[docs/dev-vm.md](docs/dev-vm.md) is one):
+
+```sh
+sh scripts/demo.sh
+```
+
+Keys, signature, dry-run decisions, kernel enforcement, the event
+stream, and a tampered policy refused — everything above, shown.
+
 ## Development
 
 Requires Go 1.26+. The packages under `internal/` are platform-neutral
