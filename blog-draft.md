@@ -1,6 +1,6 @@
-# 给 AI Agent 进程套上 eBPF 沙箱：设计笔记与内核教我的七课（草稿 v0.2）
+# 给 AI Agent 进程套上 eBPF 沙箱：设计笔记与内核教我的七课（草稿 v0.3）
 
-> 状态：随 agent-sandbox 实现修订。目标平台：个人技术博客。
+> 状态：M0+M1+M2 完成后的完整稿。目标平台：个人技术博客。
 > 素材纪律：只写已实现并验证的内容；设计部分明确标注"计划"。
 
 ## 为什么是现在
@@ -54,15 +54,16 @@ net 允许表怎么查都不中。三层排查（禁用 net LSM 二分、绝对�
 
 ## 已实现并验证的部分
 
-- **作用域：cgroup v2 + shim 模式**——进程自己把自己写进 cgroup 再 exec，零竞态窗口（M0 就验证过：shim 自身的 exec 计数在 scope 外，语义正确）
+- **作用域：cgroup v2 + shim 模式**——进程自己把自己写进 cgroup 再 exec，零竞态窗口（shim 自身的 exec 计数在 scope 外，语义正确）
 - **exec 拦截**（`lsm/bprm_check_security`）：exact hash + LPM 双表，六项语义矩阵（允许/拒绝/前缀共串/一层命中/一层深度/递归）
 - **file 拦截**（`lsm/file_open`）：deny_read/deny_write 双向，方向不对称性有测试锁定（deny_read 不拒写）
 - **net 拦截**（`lsm/socket_connect`）：CIDR LPM（v4 走 v4mapped 形式防族混串）优先于 allow 表
 - **默认值的不对称**：exec/net 是 allow-list（未列名拒绝），file 是 deny-list（未列名放行）——每个判定带规则溯源（`exec.allow[1]`、`net.deny_cidr[0]`）
-- **用户态/内核态同源**：一个编译器（decision.Engine）产出两边的表，`decide` 子命令是引擎判定的人类可读接口，将来做 parity 测试的基准
+- **签名层（诚实版）**：Ed25519 分离签名，`run` 强制 `--public` 验证后才把规则送进内核，未签名策略直接拒绝。包注释写明边界：防传输中篡改和误改，**防不了 root**（root 可改 runtime、密钥、内核）——shirudo 用内核补丁 + 密封 keyring + TPM 关闭那条边界，那是另一个产品
+- **事件流**：ringbuf 逐 exec 记录（binary/pid/ktime），NDJSON 输出与计数 map 互相印证；drop 计数让部分流自己声明不完整。第一版 `Read` 在空 ring 上永久阻塞——超时 timer 关 reader 解锁，ringbuf 的经典坑
+- **同源编译器 + parity 套件**：一个编译器产出引擎和内核两张表；parity 测试把三方锁死（引擎判定 ↔ 内核表镜像 ↔ 期望表），14 用例在真内核上全绿。写它时还验证了 parity 的价值：第一轮两处失败都是**测试作者错、代码对**——引擎和内核互相印证共同否决了测试表
 
 ## 待写（实现后补）
 
-- 用户态签名校验（M2 简化版：防误加载，明说防不了恶意 root）
-- OTLP 事件导出
-- ringbuf 事件流（当前是计数 map，事件流是 agent-sandbox 的审计叙事收尾）
+- OTLP 事件导出（NDJSON 已够 demo，OTLP 是运维接入）
+- fuzz 扩展到 match 与 event 的内核侧输入
