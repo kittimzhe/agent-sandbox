@@ -18,7 +18,11 @@ for f in \
     policy_exec_arm64_bpfel.go policy_exec_arm64_bpfel.o \
     policy_exec_x86_bpfel.go policy_exec_x86_bpfel.o \
     policy_file_arm64_bpfel.go policy_file_arm64_bpfel.o \
-    policy_file_x86_bpfel.go policy_file_x86_bpfel.o
+    policy_file_x86_bpfel.go policy_file_x86_bpfel.o \
+    policy_net_arm64_bpfel.go policy_net_arm64_bpfel.o \
+    policy_net_x86_bpfel.go policy_net_x86_bpfel.o \
+    events_arm64_bpfel.go events_arm64_bpfel.o \
+    events_x86_bpfel.go events_x86_bpfel.o
 do
     limactl cp "sandbox-dev:/home/mengzhe.guest/build/internal/loader/$f" "$dest/$f"
 done
