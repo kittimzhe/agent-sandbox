@@ -1,8 +1,8 @@
 // Command agent-sandbox runs a sandboxed process tree under a policy.
 //
-// Today it validates a policy file and prints the decision for one
-// access; run and observe need a Linux host with a BPF kernel and are
-// not implemented yet.
+// validate and decide run anywhere; observe loads the BPF programs and
+// watches a command under the policy's scope, on a Linux host with a
+// BPF-capable kernel; run, which enforces, is M1.
 package main
 
 import (
@@ -31,13 +31,33 @@ Usage:
       that made it. The dry-run of observe mode, on any host.
 
   agent-sandbox run --policy <file> -- <command> [args...]
-      (Linux, not implemented yet) Run a command under the policy.
+      (M1) Run a command under the policy, enforced by the kernel.
 
   agent-sandbox observe --policy <file> -- <command> [args...]
-      (Linux, not implemented yet) Run with the policy dry-run.
+      (Linux) Run a command under the policy's scope with the kernel
+      watching: the exec counts of the scope, no enforcement yet.
 `
 
+// The Linux build replaces both: observeCmd with the real observe,
+// scopeShim with the shim dispatch. A darwin build keeps the stubs, so
+// validate and decide still build and run on a development host.
+var (
+	observeCmd = func(args []string) error {
+		return fmt.Errorf("observe needs a Linux host with a BPF kernel")
+	}
+	scopeShim = func(argv []string) (bool, error) { return false, nil }
+)
+
 func main() {
+	// The scope shim runs before anything else: it exists only to
+	// move itself into a cgroup and exec the command.
+	if handled, err := scopeShim(os.Args[1:]); handled {
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(126)
+		}
+		return // unreachable: the shim execs
+	}
 	if len(os.Args) < 2 {
 		fmt.Fprint(os.Stderr, usage)
 		os.Exit(2)
@@ -48,9 +68,10 @@ func main() {
 		err = validate(os.Args[2:])
 	case "decide":
 		err = decide(os.Args[2:])
-	case "run", "observe":
-		fmt.Fprintf(os.Stderr, "%s needs a Linux host with a BPF kernel; it is not implemented yet\n", os.Args[1])
-		os.Exit(2)
+	case "observe":
+		err = observeCmd(os.Args[2:])
+	case "run":
+		err = fmt.Errorf("run needs policy enforcement in the kernel, which is M1")
 	case "help", "-h", "--help":
 		fmt.Print(usage)
 		return
@@ -62,11 +83,6 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-}
-
-// summary counts the rules a policy compiles to.
-type summary struct {
-	execAllow, fileDenyRead, fileDenyWrite, netAllow, netDenyCIDR int
 }
 
 // loadPolicy reads, parses and compiles a policy file.

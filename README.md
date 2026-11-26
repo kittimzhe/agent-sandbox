@@ -5,11 +5,12 @@ tree a policy: what it may execute, what it may open, where it may
 connect. Everything the kernel reports or refuses comes out as one JSON
 event per line.
 
-**Status: design and userspace foundation.** The BPF programs and the
-loader need a Linux host with a BPF-capable kernel; they are not in the
-tree yet. See [DESIGN.md](DESIGN.md) for the architecture, the
-milestones and what this deliberately does not do (no kernel patches,
-no TPM, no daemon).
+**Status: the kernel side runs.** `observe` loads a BPF program
+(tracepoint `sched/sched_process_exec`, compiled with `-mcpu=v4`),
+attaches it, runs a command inside a cgroup v2 scope, and reports the
+exec count of the scope — no enforcement yet, that is M1. See
+[DESIGN.md](DESIGN.md) for the architecture and what this
+deliberately does not do (no kernel patches, no TPM, no daemon).
 
 ## The policy file
 
@@ -45,7 +46,7 @@ net:
 
 ## Development
 
-Requires Go 1.27+. The packages under `internal/` are platform-neutral
+Requires Go 1.26+. The packages under `internal/` are platform-neutral
 and test anywhere:
 
 ```sh
@@ -60,6 +61,16 @@ refused — the dry-run of observe mode, on any host:
 ```sh
 $ go run ./cmd/agent-sandbox decide --policy policy.yaml net tcp 169.254.169.254 443
 {"allowed":false,"rule":"net.deny_cidr[0]"}
+```
+
+`observe` needs a Linux host with a BPF-capable kernel; the tree
+carries a Lima VM template that sets one up (see
+[docs/dev-vm.md](docs/dev-vm.md)):
+
+```sh
+sudo agent-sandbox observe --policy policy.yaml -- /bin/sh -c 'ls /'
+# observing /bin/sh -c ls / in /sys/fs/cgroup/agent-sandbox
+# 2 execs in the scope
 ```
 
 ## Related
