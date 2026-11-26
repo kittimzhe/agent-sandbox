@@ -12,6 +12,7 @@
 package loader
 
 //go:generate go run github.com/cilium/ebpf/cmd/bpf2go -target amd64,arm64 -cflags "-mcpu=v4 -O2 -g -I../../bpf" count_exec ../../bpf/count_exec.bpf.c
+//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -target amd64,arm64 -cflags "-mcpu=v4 -O2 -g -I../../bpf" policy_exec ../../bpf/policy_exec.bpf.c
 
 import (
 	"errors"
@@ -19,6 +20,7 @@ import (
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
+	"github.com/kittimzhe/agent-sandbox/internal/match"
 	"golang.org/x/sys/unix"
 )
 
@@ -83,4 +85,118 @@ func (c *Counters) CountOf(cgroupID uint64) (uint64, error) {
 		return 0, err
 	}
 	return n, nil
+}
+
+// The kernel's rule table. The C side pins the sizes; the loader
+// refuses a policy that does not fit, never truncates one.
+const (
+	maxRules  = 64
+	maxPrefix = 64
+)
+
+// ruleKind mirrors the C constants in policy_exec.bpf.c.
+const (
+	kindExact = 0
+	kindOne   = 1
+	kindRec   = 2
+)
+
+type cRule struct {
+	Kind uint8
+	Plen uint8 // the rule's own prefix, in bytes
+	_    [6]byte
+}
+
+type cKey struct {
+	PrefixLen uint32 // bits
+	Data      [maxPrefix]byte
+}
+
+type cPath struct {
+	Data [maxPrefix]byte
+}
+
+// Enforcement is the loaded LSM program with its maps filled.
+type Enforcement struct {
+	Obj  *policy_execObjects
+	Link link.Link
+}
+
+// LoadPolicy loads the LSM program and fills its maps from the
+// compiled rules: one LPM key per rule, and the scope cgroup the task
+// must sit in. Recursive and one-level rules carry the trailing '/'
+// in their key — a name that only shares the prefix must not match.
+// The maps are pinned by no one; the program lives only as long as
+// the runtime does.
+func LoadPolicy(rules []match.Rule, scopeCgroupID uint64) (*Enforcement, error) {
+	if len(rules) > maxRules {
+		return nil, fmt.Errorf("%d exec rules, the kernel table holds %d", len(rules), maxRules)
+	}
+	obj := &policy_execObjects{}
+	if err := loadPolicy_execObjects(obj, nil); err != nil {
+		return nil, fmt.Errorf("load policy_exec: %w", err)
+	}
+	fail := func(err error) (*Enforcement, error) {
+		obj.Close()
+		return nil, err
+	}
+	for i, r := range rules {
+		prefix := r.Prefix()
+		if r.Kind() != match.Exact {
+			// A glob's prefix is the directory: keep its slash, so
+			// /bin/** does not match /binutils. match drops it.
+			prefix += "/"
+		}
+		if len(prefix) > maxPrefix {
+			return fail(fmt.Errorf("rule %d (%q) does not fit the kernel table: a key holds %d bytes", i, r.Pattern(), maxPrefix))
+		}
+		if r.Kind() == match.Exact {
+			// Equality is a hash lookup on the whole path: a bit
+			// prefix would also match a longer name that shares it.
+			var pk cPath
+			copy(pk.Data[:], prefix)
+			if err := obj.ExecExact.Update(&pk, uint8(1), ebpf.UpdateAny); err != nil {
+				return fail(fmt.Errorf("rule %d: %w", i, err))
+			}
+			continue
+		}
+		var (
+			key cKey
+			val cRule
+		)
+		key.PrefixLen = uint32(len(prefix)) * 8
+		copy(key.Data[:], prefix)
+		switch r.Kind() {
+		case match.OneLevel:
+			val.Kind = kindOne
+		case match.Recursive:
+			val.Kind = kindRec
+		}
+		val.Plen = uint8(len(prefix))
+		if err := obj.ExecRules.Update(&key, &val, ebpf.UpdateAny); err != nil {
+			return fail(fmt.Errorf("rule %d: %w", i, err))
+		}
+	}
+	// The rest of the table stays empty: LPM matches only what the
+	// loader put in.
+	if err := obj.ScopedCgroups.Update(scopeCgroupID, uint8(1), ebpf.UpdateAny); err != nil {
+		return fail(fmt.Errorf("scope cgroup: %w", err))
+	}
+	l, err := link.AttachLSM(link.LSMOptions{Program: obj.CheckExec})
+	if err != nil {
+		return fail(fmt.Errorf("attach lsm/bprm_check_security: %w", err))
+	}
+	return &Enforcement{Obj: obj, Link: l}, nil
+}
+
+// Close detaches and frees the program and its maps.
+func (e *Enforcement) Close() error {
+	if e == nil {
+		return nil
+	}
+	err := e.Link.Close()
+	if err2 := e.Obj.Close(); err == nil {
+		err = err2
+	}
+	return err
 }

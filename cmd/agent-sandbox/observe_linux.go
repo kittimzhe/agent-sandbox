@@ -17,6 +17,7 @@ import (
 
 func init() {
 	observeCmd = observe
+	runCmd = run
 	scopeShim = shimDispatch
 }
 
@@ -111,4 +112,85 @@ func cgroupID(path string) (uint64, error) {
 		return 0, fmt.Errorf("stat cgroup: %w", err)
 	}
 	return st.Ino, nil
+}
+
+// run enforces: the LSM program refuses what the policy's exec.allow
+// list does not name, for every task in the scope. The command sees
+// EPERM, the same decision the engine prints, with the rule that made
+// it on stderr.
+func run(args []string) error {
+	policyFile, command, err := parseRunArgs(args)
+	if err != nil {
+		return err
+	}
+	p, e, err := loadPolicy(policyFile)
+	if err != nil {
+		return err
+	}
+	counters, err := loader.LoadCounters()
+	if err != nil {
+		return err
+	}
+	defer counters.Close()
+	sc, err := scope.Open(p.Scope.Cgroup)
+	if err != nil {
+		return err
+	}
+	selfExe, err := os.Executable()
+	if err != nil {
+		sc.Close()
+		return err
+	}
+	id, err := cgroupID(sc.Path)
+	if err != nil {
+		sc.Close()
+		return err
+	}
+	// The rules the engine holds are the rules the kernel holds; one
+	// compiler, one behavior, and the parity test replays the engine's
+	// cases against the kernel when it arrives.
+	ef, err := loader.LoadPolicy(e.ExecRules(), id)
+	if err != nil {
+		sc.Close()
+		return err
+	}
+	defer ef.Close()
+	fmt.Fprintf(os.Stderr, "running %s in %s under %s\n", strings.Join(command, " "), sc.Path, p.Name)
+	cmd, err := sc.RunScoped(selfExe, command)
+	if err != nil {
+		sc.Close()
+		return err
+	}
+	werr := cmd.Wait()
+	ef.Close()
+	if rerr := sc.Close(); rerr != nil {
+		fmt.Fprintf(os.Stderr, "remove cgroup: %v\n", rerr)
+	}
+	return werr
+}
+
+// parseRunArgs splits the run line like observe's: --policy before
+// the command, the command after --.
+func parseRunArgs(args []string) (string, []string, error) {
+	var policyFile string
+	var command []string
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--policy" {
+			if i+1 >= len(args) {
+				return "", nil, fmt.Errorf("--policy needs a file")
+			}
+			policyFile = args[i+1]
+			i++
+			continue
+		}
+		if args[i] == "--" {
+			command = args[i+1:]
+			break
+		}
+		return "", nil, fmt.Errorf("usage: agent-sandbox run --policy <file> -- <command> [args...]")
+	}
+	if policyFile == "" || len(command) == 0 {
+		return "", nil, fmt.Errorf("usage: agent-sandbox run --policy <file> -- <command> [args...]")
+	}
+	return policyFile, command, nil
 }

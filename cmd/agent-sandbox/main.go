@@ -45,6 +45,9 @@ var (
 	observeCmd = func(args []string) error {
 		return fmt.Errorf("observe needs a Linux host with a BPF kernel")
 	}
+	runCmd = func(args []string) error {
+		return fmt.Errorf("run needs a Linux host with a BPF kernel")
+	}
 	scopeShim = func(argv []string) (bool, error) { return false, nil }
 )
 
@@ -71,7 +74,7 @@ func main() {
 	case "observe":
 		err = observeCmd(os.Args[2:])
 	case "run":
-		err = fmt.Errorf("run needs policy enforcement in the kernel, which is M1")
+		err = runCmd(os.Args[2:])
 	case "help", "-h", "--help":
 		fmt.Print(usage)
 		return

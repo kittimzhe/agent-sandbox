@@ -108,6 +108,12 @@ func (e *Engine) File(path string, write bool) Verdict {
 	return Verdict{Allowed: true}
 }
 
+// ExecRules is the compiled exec table, in policy order: what the
+// kernel side fills its own table with, so one compiler backs both.
+func (e *Engine) ExecRules() []match.Rule {
+	return e.execAllow
+}
+
 // Net decides whether a sandboxed task may connect to an address.
 // A CIDR the policy refuses is refused before the allow list, so a
 // port an allow entry names is still refused inside that CIDR.
