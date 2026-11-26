@@ -97,7 +97,10 @@ int BPF_PROG(check_file, struct file *file)
 	struct rule_key rkey = {};
 	struct rule *r;
 	__u8 *hit;
-	char path[MAX_PREFIX];
+	/* The path buffer starts zeroed: bpf_d_path guarantees the NUL,
+	   not the tail, and the exact key compares all sixty-four
+	   bytes. */
+	char path[MAX_PREFIX] = {};
 	__u64 cgroup;
 	__u8 *in_scope;
 	__u32 mode;

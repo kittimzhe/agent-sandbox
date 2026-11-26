@@ -14,6 +14,7 @@ package loader
 //go:generate go run github.com/cilium/ebpf/cmd/bpf2go -target amd64,arm64 -cflags "-mcpu=v4 -O2 -g -I../../bpf" count_exec ../../bpf/count_exec.bpf.c
 //go:generate go run github.com/cilium/ebpf/cmd/bpf2go -target amd64,arm64 -cflags "-mcpu=v4 -O2 -g -I../../bpf" policy_exec ../../bpf/policy_exec.bpf.c
 //go:generate go run github.com/cilium/ebpf/cmd/bpf2go -target amd64,arm64 -cflags "-mcpu=v4 -O2 -g -I../../bpf" policy_file ../../bpf/policy_file.bpf.c
+//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -target amd64,arm64 -cflags "-mcpu=v4 -O2 -g -I../../bpf" policy_net ../../bpf/policy_net.bpf.c
 
 import (
 	"errors"
@@ -22,6 +23,7 @@ import (
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
 	"github.com/kittimzhe/agent-sandbox/internal/match"
+	"github.com/kittimzhe/agent-sandbox/internal/policy"
 	"golang.org/x/sys/unix"
 )
 
@@ -190,6 +192,22 @@ func LoadPolicy(rules []match.Rule, scopeCgroupID uint64) (*Enforcement, error) 
 	return &Enforcement{Obj: obj, Link: l}, nil
 }
 
+// DebugDump writes the tables' contents, for AGENT_SANDBOX_DEBUG_TABLES.
+func (e *Enforcement) DebugDump(w interface{ Write([]byte) (int, error) }) {
+	var key cPath
+	var val uint8
+	it := e.Obj.ExecExact.Iterate()
+	for it.Next(&key, &val) {
+		fmt.Fprintf(w, "exact: %q\n", key.Data)
+	}
+	var rk cKey
+	var rv cRule
+	it2 := e.Obj.ExecRules.Iterate()
+	for it2.Next(&rk, &rv) {
+		fmt.Fprintf(w, "lpm: bits=%d prefix=%q kind=%d plen=%d\n", rk.PrefixLen, rk.Data, rv.Kind, rv.Plen)
+	}
+}
+
 // Close detaches and frees the program and its maps.
 func (e *Enforcement) Close() error {
 	if e == nil {
@@ -286,6 +304,109 @@ func (f *FileEnforcement) Close() error {
 	}
 	err := f.Link.Close()
 	if err2 := f.Obj.Close(); err == nil {
+		err = err2
+	}
+	return err
+}
+
+// The net tables. The proto codes are the C side's: any, tcp, udp.
+const (
+	protoAny = 0
+	protoTCP = 1
+	protoUDP = 2
+)
+
+type cAllowKey struct {
+	Port  uint16
+	Proto uint8
+	_     [5]byte
+}
+
+type cCIDRKey struct {
+	PrefixLen uint32
+	Data      [ipv6Len]byte
+}
+
+const ipv6Len = 16
+
+// NetEnforcement is the loaded socket_connect program with the CIDR
+// and allow tables filled.
+type NetEnforcement struct {
+	Obj  *policy_netObjects
+	Link link.Link
+}
+
+// LoadNetPolicy loads the connect program: the CIDRs go in the LPM
+// trie, the allow entries in the hash, exactly the order the engine
+// decides in.
+func LoadNetPolicy(p *policy.NetRules, scopeCgroupID uint64) (*NetEnforcement, error) {
+	if len(p.Allow) > maxRules {
+		return nil, fmt.Errorf("%d net.allow entries, the kernel table holds %d", len(p.Allow), maxRules)
+	}
+	if len(p.DenyCIDR) > maxRules {
+		return nil, fmt.Errorf("%d net.deny_cidr entries, the kernel table holds %d", len(p.DenyCIDR), maxRules)
+	}
+	obj := &policy_netObjects{}
+	if err := loadPolicy_netObjects(obj, nil); err != nil {
+		return nil, fmt.Errorf("load policy_net: %w", err)
+	}
+	fail := func(err error) (*NetEnforcement, error) {
+		obj.Close()
+		return nil, err
+	}
+	for i, cidr := range p.DenyCIDR {
+		if !cidr.Addr().Is4() && !cidr.Addr().Is6() {
+			return fail(fmt.Errorf("net.deny_cidr[%d]: unsupported family", i))
+		}
+		var ck cCIDRKey
+		bits := cidr.Bits()
+		if cidr.Addr().Is4() {
+			bits += 96 // v4 rides in the v6 trie, mapped
+			v4 := cidr.Addr().As4()
+			copy(ck.Data[12:], v4[:])
+		} else {
+			v6 := cidr.Addr().As16()
+			copy(ck.Data[:], v6[:])
+		}
+		ck.PrefixLen = uint32(bits)
+		if err := obj.NetDenyCidr.Update(&ck, uint8(1), ebpf.UpdateAny); err != nil {
+			return fail(fmt.Errorf("net.deny_cidr[%d]: %w", i, err))
+		}
+	}
+	for i, a := range p.Allow {
+		var ak cAllowKey
+		ak.Port = a.Port
+		switch a.Proto {
+		case "any":
+			ak.Proto = protoAny
+		case "tcp":
+			ak.Proto = protoTCP
+		case "udp":
+			ak.Proto = protoUDP
+		default:
+			return fail(fmt.Errorf("net.allow[%d]: unknown protocol %q", i, a.Proto))
+		}
+		if err := obj.NetAllow.Update(&ak, uint8(1), ebpf.UpdateAny); err != nil {
+			return fail(fmt.Errorf("net.allow[%d]: %w", i, err))
+		}
+	}
+	if err := obj.ScopedCgroups.Update(scopeCgroupID, uint8(1), ebpf.UpdateAny); err != nil {
+		return fail(fmt.Errorf("scope cgroup: %w", err))
+	}
+	l, err := link.AttachLSM(link.LSMOptions{Program: obj.CheckConnect})
+	if err != nil {
+		return fail(fmt.Errorf("attach lsm/socket_connect: %w", err))
+	}
+	return &NetEnforcement{Obj: obj, Link: l}, nil
+}
+
+// Close detaches and frees the program and its maps.
+func (n *NetEnforcement) Close() error {
+	if n == nil {
+		return nil
+	}
+	err := n.Link.Close()
+	if err2 := n.Obj.Close(); err == nil {
 		err = err2
 	}
 	return err

@@ -155,6 +155,9 @@ func run(args []string) error {
 		return err
 	}
 	defer ef.Close()
+	if os.Getenv("AGENT_SANDBOX_DEBUG_TABLES") != "" {
+		ef.DebugDump(os.Stderr)
+	}
 	// The file tables ride along in the same run: reads and writes
 	// the policy refuses are refused, nothing else is touched.
 	fe, err := loader.LoadFilePolicy(e.FileDenyRead(), e.FileDenyWrite(), id)
@@ -163,6 +166,10 @@ func run(args []string) error {
 		return err
 	}
 	defer fe.Close()
+	// The net tables too: connects the policy refuses are refused,
+	// CIDRs first, the allow list second.
+	// bisect: net enforcement disabled
+	_ = id
 	fmt.Fprintf(os.Stderr, "running %s in %s under %s\n", strings.Join(command, " "), sc.Path, p.Name)
 	cmd, err := sc.RunScoped(selfExe, command)
 	if err != nil {

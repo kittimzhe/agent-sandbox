@@ -80,7 +80,10 @@ struct {
 SEC("lsm/bprm_check_security")
 int BPF_PROG(check_exec, struct linux_binprm *bprm, int ret)
 {
-	char path[MAX_PREFIX];
+	/* The path buffer starts zeroed: bpf_probe_read_kernel_str
+	   guarantees the NUL, not the tail, and the exact key compares
+	   all sixty-four bytes. */
+	char path[MAX_PREFIX] = {};
 	struct path_key exact = {};
 	struct rule_key key = {};
 	struct rule *r;
