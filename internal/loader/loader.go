@@ -11,7 +11,7 @@
 
 package loader
 
-//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -target bpf -cflags "-mcpu=v4 -O2 -g -I../../bpf" count_exec ../../bpf/count_exec.bpf.c
+//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -target amd64,arm64 -cflags "-mcpu=v4 -O2 -g -I../../bpf" count_exec ../../bpf/count_exec.bpf.c
 
 import (
 	"errors"

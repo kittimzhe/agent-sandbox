@@ -11,3 +11,6 @@ bpf/vmlinux.h
 # Go
 *.a
 *.o
+# The BPF objects bpf2go embeds are built artifacts that ship in the
+# tree, so the loader builds without clang.
+!internal/loader/*.o
