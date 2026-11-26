@@ -5,6 +5,9 @@
 /fuzz-corpus/
 testdata/fuzz/
 
+# The generated kernel types; regenerate with bpf/gen-vmlinux.sh.
+bpf/vmlinux.h
+
 # Go
 *.a
 *.o
