@@ -15,18 +15,24 @@ package loader
 //go:generate go run github.com/cilium/ebpf/cmd/bpf2go -target amd64,arm64 -cflags "-mcpu=v4 -O2 -g -I../../bpf" policy_exec ../../bpf/policy_exec.bpf.c
 //go:generate go run github.com/cilium/ebpf/cmd/bpf2go -target amd64,arm64 -cflags "-mcpu=v4 -O2 -g -I../../bpf" policy_file ../../bpf/policy_file.bpf.c
 //go:generate go run github.com/cilium/ebpf/cmd/bpf2go -target amd64,arm64 -cflags "-mcpu=v4 -O2 -g -I../../bpf" policy_net ../../bpf/policy_net.bpf.c
-
+//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -target amd64,arm64 -cflags "-mcpu=v4 -O2 -g -I../../bpf" events ../../bpf/events.bpf.c
 import (
+	"bytes"
+	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
+	"github.com/cilium/ebpf/ringbuf"
 	"github.com/kittimzhe/agent-sandbox/internal/match"
 	"github.com/kittimzhe/agent-sandbox/internal/policy"
-	"golang.org/x/sys/unix"
 	"net/netip"
+
+	"golang.org/x/sys/unix"
 )
 
 // Counters is the loaded count_exec program and its map.
@@ -506,4 +512,103 @@ func (n *NetEnforcement) KernelAllows(proto string, addr netip.Addr, port uint16
 		return true
 	}
 	return false
+}
+
+// cExecEvent mirrors the kernel record in events.bpf.c, the reader
+// side of the stream.
+type cExecEvent struct {
+	Cgroup uint64
+	KTime  uint64
+	PID    uint32
+	PPID   uint32
+	Comm   [16]byte
+}
+
+// Events is the loaded exec event stream.
+type Events struct {
+	Obj  *eventsObjects
+	Link link.Link
+}
+
+// LoadEvents loads the stream and attaches the emitter; the scope's
+// execs flow once its cgroup is named.
+func LoadEvents(scopeCgroupID uint64) (*Events, error) {
+	obj := &eventsObjects{}
+	if err := loadEventsObjects(obj, nil); err != nil {
+		return nil, fmt.Errorf("load events: %w", err)
+	}
+	fail := func(err error) (*Events, error) {
+		obj.Close()
+		return nil, err
+	}
+	if err := obj.ScopedCgroups.Update(scopeCgroupID, uint8(1), ebpf.UpdateAny); err != nil {
+		return fail(fmt.Errorf("scope cgroup: %w", err))
+	}
+	l, err := link.Tracepoint("sched", "sched_process_exec", obj.EmitExec, nil)
+	if err != nil {
+		return fail(fmt.Errorf("attach tracepoint: %w", err))
+	}
+	return &Events{Obj: obj, Link: l}, nil
+}
+
+// Close detaches and frees.
+func (s *Events) Close() error {
+	if s == nil {
+		return nil
+	}
+	err := s.Link.Close()
+	if err2 := s.Obj.Close(); err == nil {
+		err = err2
+	}
+	return err
+}
+
+// Read drains the ring buffer and converts the records into NDJSON
+// lines. It waits at most the timeout for the first record and stops
+// at the first empty read after that — the ring has whatever the
+// kernel kept, and a quiet ring is a valid answer. It returns the
+// dropped count beside them: a stream with drops says so, never
+// silently pretends whole.
+func (s *Events) Read(w interface{ Write([]byte) (int, error) }, timeout time.Duration) (int, error) {
+	rd, err := ringbuf.NewReader(s.Obj.Events)
+	if err != nil {
+		return 0, err
+	}
+	defer rd.Close()
+	// The reader is blocking; a timer closes it when the ring goes
+	// quiet, which unblocks a pending Read with a closed error.
+	timer := time.AfterFunc(timeout, func() { rd.Close() })
+	defer timer.Stop()
+	wrote := 0
+	for {
+		rec, err := rd.Read()
+		if err != nil {
+			// Closed by the timer or the deferred close: whatever
+			// the ring held has been read.
+			return wrote, nil
+		}
+		if len(rec.RawSample) != 8+8+4+4+16 { // cExecEvent, its fields in order
+			return wrote, fmt.Errorf("record is %d bytes, want 40", len(rec.RawSample))
+		}
+		var ce cExecEvent
+		if err := binary.Read(bytes.NewReader(rec.RawSample), binary.LittleEndian, &ce); err != nil {
+			return wrote, err
+		}
+		comm := string(bytes.TrimRight(ce.Comm[:], "\x00"))
+		b, err := json.Marshal(struct {
+			Schema   uint64 `json:"schema"`
+			Kind     string `json:"kind"`
+			Decision string `json:"decision"`
+			PID      uint32 `json:"pid"`
+			Comm     string `json:"comm"`
+			KTimeNS  uint64 `json:"ktime_ns"`
+		}{Schema: 1, Kind: "exec", Decision: "allow", PID: ce.PID, Comm: comm, KTimeNS: ce.KTime})
+		if err != nil {
+			return wrote, err
+		}
+		if _, err := w.Write(append(b, '\n')); err != nil {
+			return wrote, err
+		}
+		wrote++
+	}
 }

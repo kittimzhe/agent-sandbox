@@ -10,6 +10,7 @@ import (
 	"os"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/kittimzhe/agent-sandbox/internal/loader"
 	"github.com/kittimzhe/agent-sandbox/internal/scope"
@@ -71,17 +72,25 @@ func observe(args []string) error {
 		sc.Close()
 		return err
 	}
-	fmt.Fprintf(os.Stderr, "observing %s in %s\n", strings.Join(command, " "), sc.Path)
-	cmd, err := sc.RunScoped(selfExe, command)
-	if err != nil {
-		sc.Close()
-		return err
-	}
 	// The scope cgroup's id is the inode number of its directory, the
 	// value bpf_get_current_cgroup_id reports to the programs.
 	id, err := cgroupID(sc.Path)
 	if err != nil {
-		cmd.Wait()
+		sc.Close()
+		return err
+	}
+	// The event stream: one NDJSON line per exec in the scope, on
+	// stderr beside the counts. The stream's ring is drained after
+	// the command exits, one read, the records the kernel kept.
+	stream, err := loader.LoadEvents(id)
+	if err != nil {
+		sc.Close()
+		return err
+	}
+	defer stream.Close()
+	fmt.Fprintf(os.Stderr, "observing %s in %s\n", strings.Join(command, " "), sc.Path)
+	cmd, err := sc.RunScoped(selfExe, command)
+	if err != nil {
 		sc.Close()
 		return err
 	}
@@ -90,6 +99,9 @@ func observe(args []string) error {
 	if err != nil {
 		sc.Close()
 		return fmt.Errorf("read counters: %w", err)
+	}
+	if lines, rerr := stream.Read(os.Stderr, 500*time.Millisecond); rerr == nil && lines > 0 {
+		fmt.Fprintf(os.Stderr, "%d exec events\n", lines)
 	}
 	if rerr := sc.Close(); rerr != nil {
 		fmt.Fprintf(os.Stderr, "remove cgroup: %v\n", rerr)
