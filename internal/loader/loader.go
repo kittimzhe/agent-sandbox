@@ -19,12 +19,14 @@ package loader
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
 	"github.com/kittimzhe/agent-sandbox/internal/match"
 	"github.com/kittimzhe/agent-sandbox/internal/policy"
 	"golang.org/x/sys/unix"
+	"net/netip"
 )
 
 // Counters is the loaded count_exec program and its map.
@@ -410,4 +412,98 @@ func (n *NetEnforcement) Close() error {
 		err = err2
 	}
 	return err
+}
+
+// KernelProbe reports whether this host can load BPF programs: the
+// tracepoint the baseline counter needs exists and attaches. It is
+// what the parity tests gate on.
+func KernelProbe() bool {
+	c, err := LoadCounters()
+	if err != nil {
+		return false
+	}
+	c.Close()
+	return true
+}
+
+// CgroupID is the cgroup id of a cgroup v2 path: the inode number its
+// directory carries, the value bpf_get_current_cgroup_id reports.
+func CgroupID(path string) (uint64, error) {
+	var st unix.Stat_t
+	if err := unix.Stat(path, &st); err != nil {
+		return 0, err
+	}
+	return st.Ino, nil
+}
+
+// KernelAllows asks the exec tables the way the hook reads them:
+// exact hash first, then the LPM trie with the one-level depth check.
+// It is the kernel's decision mirrored in Go, so a parity mismatch
+// names the side that moved.
+func (e *Enforcement) KernelAllows(path string) bool {
+	if len(path) > maxPrefix || !strings.HasPrefix(path, "/") {
+		return false
+	}
+	var pk cPath
+	copy(pk.Data[:], path)
+	var one uint8
+	if err := e.Obj.ExecExact.Lookup(&pk, &one); err == nil {
+		return true
+	}
+	var key cKey
+	key.PrefixLen = uint32(len(path)) * 8
+	copy(key.Data[:], path)
+	var rule cRule
+	if err := e.Obj.ExecRules.Lookup(&key, &rule); err != nil {
+		return false
+	}
+	switch rule.Kind {
+	case kindRec:
+		return true
+	case kindOne:
+		for i := int(rule.Plen) + 1; i < len(path); i++ {
+			if path[i] == '/' {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
+// KernelAllows asks the net tables the way the hook reads them: the
+// CIDR trie first, then the allow hash for the protocol and for any.
+// It is the kernel's decision mirrored in Go for the parity tests.
+func (n *NetEnforcement) KernelAllows(proto string, addr netip.Addr, port uint16) bool {
+	var ck cCIDRKey
+	bits := 128
+	if addr.Is4() {
+		v4 := addr.As4()
+		copy(ck.Data[12:], v4[:])
+	} else {
+		v6 := addr.As16()
+		copy(ck.Data[:], v6[:])
+	}
+	ck.PrefixLen = uint32(bits)
+	if err := n.Obj.NetDenyCidr.Lookup(&ck, new(uint8)); err == nil {
+		return false
+	}
+	var ak cAllowKey
+	ak.Port = port
+	ak.Proto = protoAny
+	if err := n.Obj.NetAllow.Lookup(&ak, new(uint8)); err == nil {
+		return true
+	}
+	switch proto {
+	case "tcp":
+		ak.Proto = protoTCP
+	case "udp":
+		ak.Proto = protoUDP
+	default:
+		return false
+	}
+	if err := n.Obj.NetAllow.Lookup(&ak, new(uint8)); err == nil {
+		return true
+	}
+	return false
 }
