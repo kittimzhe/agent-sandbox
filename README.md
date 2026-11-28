@@ -58,6 +58,12 @@ sh scripts/demo.sh
 Keys, signature, dry-run decisions, kernel enforcement, the event
 stream, and a tampered policy refused — everything above, shown.
 
+`sudo bash scripts/e2e.sh` asserts the same claims instead of
+showing them: 17 cases across exec, file, net, signature and the
+event stream, each pinned to the errno text a refusal by the policy
+produces. It builds the binary it tests with and exits on a failed
+build — a stale binary is exactly the failure mode it exists to catch.
+
 ## Development
 
 Requires Go 1.26+. The packages under `internal/` are platform-neutral
