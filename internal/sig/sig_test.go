@@ -1,6 +1,9 @@
 package sig
 
 import (
+	"bytes"
+	"encoding/base64"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -97,13 +100,24 @@ func TestTamperedSignatureRefused(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Flip one character of the base64 payload: still parseable, no
-	// longer the signature.
-	fixed := strings.Replace(string(raw), "A", "B", 1)
-	if fixed == string(raw) {
-		fixed = strings.Replace(string(raw), "B", "C", 1)
+	var s Signature
+	if err := json.Unmarshal(raw, &s); err != nil {
+		t.Fatal(err)
 	}
-	if err := os.WriteFile(sigPath, []byte(fixed), 0o644); err != nil {
+	b, err := base64.StdEncoding.DecodeString(s.Sig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b[0] ^= 0xff // a flipped bit: still 64 bytes, no longer the signature
+	s.Sig = base64.StdEncoding.EncodeToString(b)
+	tampered, err := json.Marshal(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(tampered, raw) {
+		t.Fatal("the tampering changed nothing")
+	}
+	if err := os.WriteFile(sigPath, tampered, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := Verify(pub, policy); err == nil {
