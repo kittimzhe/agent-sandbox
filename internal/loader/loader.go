@@ -317,11 +317,16 @@ func (f *FileEnforcement) Close() error {
 	return err
 }
 
-// The net tables. The proto codes are the C side's: any, tcp, udp.
+// The net tables. The allow hash keys on the protocol value the
+// kernel reports in sk_protocol -- IPPROTO_TCP and IPPROTO_UDP, the
+// numbers the C program reads -- with 0 as the "any" entry the hook
+// consults first. The codes 1 and 2 they once had were an
+// invention: the kernel never reports them, and every allow entry
+// missed while every connect was refused.
 const (
 	protoAny = 0
-	protoTCP = 1
-	protoUDP = 2
+	protoTCP = 6  // IPPROTO_TCP
+	protoUDP = 17 // IPPROTO_UDP
 )
 
 type cAllowKey struct {

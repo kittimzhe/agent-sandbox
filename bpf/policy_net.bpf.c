@@ -88,6 +88,39 @@ struct {
 	__type(value, __u64);
 } net_denied SEC(".maps");
 
+/* Diagnostic counters: the trie lookup's path, counted per cgroup,
+   because printk loses messages and the counters never do. */
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(max_entries, 16);
+	__type(key, __u64);
+	__type(value, __u64);
+} cidr_lookups SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(max_entries, 16);
+	__type(key, __u64);
+	__type(value, __u64);
+} cidr_hits SEC(".maps");
+
+/* The scope probes: the cgroup id every in-scope-family connect
+   carried, and the ones the scope map accepted. The gap between them
+   is the poisoning this suite chased. */
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(max_entries, 16);
+	__type(key, __u64);
+	__type(value, __u64);
+} scope_probes SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(max_entries, 16);
+	__type(key, __u64);
+	__type(value, __u64);
+} scope_hits SEC(".maps");
+
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
 	__uint(max_entries, 16);
@@ -131,9 +164,11 @@ int BPF_PROG(check_connect, struct socket *sock, struct sockaddr *address,
 		return ret;
 
 	cgroup = bpf_get_current_cgroup_id();
+	bump(&scope_probes, cgroup);
 	in_scope = bpf_map_lookup_elem(&scoped_cgroups, &cgroup);
 	if (!in_scope)
 		return 0; /* not ours */
+	bump(&scope_hits, cgroup);
 
 	family = BPF_CORE_READ(address, sa_family);
 	if (family == AF_INET) {
@@ -142,10 +177,15 @@ int BPF_PROG(check_connect, struct socket *sock, struct sockaddr *address,
 		   match. The reads go through the CO-RE helpers, whose
 		   sizes come from the fields: the verifier only knows the
 		   generic sockaddr's 16 bytes, and a byte loop past them
-		   is an access beyond. */
+		   is an access beyond. INTO reads into the storage it is
+		   given -- a __u8 slot would take one byte and leave the
+		   address 1.1.0.0, so the four bytes go through a __be32
+		   first, network order straight into the mapped form. */
 		struct sockaddr_in *in4 = (struct sockaddr_in *)address;
+		__be32 a4;
 
-		BPF_CORE_READ_INTO(&addr[12], in4, sin_addr);
+		BPF_CORE_READ_INTO(&a4, in4, sin_addr.s_addr);
+		__builtin_memcpy(&addr[12], &a4, 4);
 		port = __builtin_bswap16(BPF_CORE_READ(in4, sin_port));
 		bits = 128;
 	} else if (family == AF_INET6) {
@@ -163,8 +203,10 @@ int BPF_PROG(check_connect, struct socket *sock, struct sockaddr *address,
 	ck.prefixlen = bits;
 	for (i = 0; i < IPV6_LEN; i++)
 		ck.data[i] = addr[i];
+	bump(&cidr_lookups, cgroup);
 	denied = bpf_map_lookup_elem(&net_deny_cidr, &ck);
 	if (denied) {
+		bump(&cidr_hits, cgroup);
 		bump(&net_denied, cgroup);
 		return -EPERM;
 	}

@@ -75,11 +75,15 @@ type policy_netProgramSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type policy_netMapSpecs struct {
+	CidrHits      *ebpf.MapSpec `ebpf:"cidr_hits"`
+	CidrLookups   *ebpf.MapSpec `ebpf:"cidr_lookups"`
 	ConnectCounts *ebpf.MapSpec `ebpf:"connect_counts"`
 	NetAllow      *ebpf.MapSpec `ebpf:"net_allow"`
 	NetAllowed    *ebpf.MapSpec `ebpf:"net_allowed"`
 	NetDenied     *ebpf.MapSpec `ebpf:"net_denied"`
 	NetDenyCidr   *ebpf.MapSpec `ebpf:"net_deny_cidr"`
+	ScopeHits     *ebpf.MapSpec `ebpf:"scope_hits"`
+	ScopeProbes   *ebpf.MapSpec `ebpf:"scope_probes"`
 	ScopedCgroups *ebpf.MapSpec `ebpf:"scoped_cgroups"`
 }
 
@@ -109,21 +113,29 @@ func (o *policy_netObjects) Close() error {
 //
 // It can be passed to loadPolicy_netObjects or ebpf.CollectionSpec.LoadAndAssign.
 type policy_netMaps struct {
+	CidrHits      *ebpf.Map `ebpf:"cidr_hits"`
+	CidrLookups   *ebpf.Map `ebpf:"cidr_lookups"`
 	ConnectCounts *ebpf.Map `ebpf:"connect_counts"`
 	NetAllow      *ebpf.Map `ebpf:"net_allow"`
 	NetAllowed    *ebpf.Map `ebpf:"net_allowed"`
 	NetDenied     *ebpf.Map `ebpf:"net_denied"`
 	NetDenyCidr   *ebpf.Map `ebpf:"net_deny_cidr"`
+	ScopeHits     *ebpf.Map `ebpf:"scope_hits"`
+	ScopeProbes   *ebpf.Map `ebpf:"scope_probes"`
 	ScopedCgroups *ebpf.Map `ebpf:"scoped_cgroups"`
 }
 
 func (m *policy_netMaps) Close() error {
 	return _Policy_netClose(
+		m.CidrHits,
+		m.CidrLookups,
 		m.ConnectCounts,
 		m.NetAllow,
 		m.NetAllowed,
 		m.NetDenied,
 		m.NetDenyCidr,
+		m.ScopeHits,
+		m.ScopeProbes,
 		m.ScopedCgroups,
 	)
 }

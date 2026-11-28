@@ -185,8 +185,12 @@ func run(args []string) error {
 	defer fe.Close()
 	// The net tables too: connects the policy refuses are refused,
 	// CIDRs first, the allow list second.
-	// bisect: net enforcement disabled
-	_ = id
+	ne, err := loader.LoadNetPolicy(&p.Net, id)
+	if err != nil {
+		sc.Close()
+		return err
+	}
+	defer ne.Close()
 	fmt.Fprintf(os.Stderr, "running %s in %s under %s\n", strings.Join(command, " "), sc.Path, p.Name)
 	cmd, err := sc.RunScoped(selfExe, command)
 	if err != nil {
